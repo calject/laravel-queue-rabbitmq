@@ -1,7 +1,16 @@
 <?php
+/**
+ * Author: Vladimir Yuldashev
+ * email: misterio92@gmail.com
+ *
+ * code modify:
+ * Author: 沧澜
+ * Date: 2019-12-30
+ */
 
 namespace VladimirYuldashev\LaravelQueueRabbitMQ\Queue\Jobs;
 
+use Closure;
 use Exception;
 use Illuminate\Support\Str;
 use Interop\Amqp\AmqpMessage;
@@ -11,6 +20,16 @@ use Illuminate\Queue\Jobs\JobName;
 use Illuminate\Container\Container;
 use Illuminate\Database\DetectsDeadlocks;
 use Illuminate\Contracts\Queue\Job as JobContract;
+use VladimirYuldashev\LaravelQueueRabbitMQ\Component\OptCheck;
+use \VladimirYuldashev\LaravelQueueRabbitMQ\Component\RabbitMQJob as LaravelRabbitMQJob;
+use Throwable;
+use VladimirYuldashev\LaravelQueueRabbitMQ\Component\ClassSerialize;
+use VladimirYuldashev\LaravelQueueRabbitMQ\Constants\RabbitMQEvent;
+use VladimirYuldashev\LaravelQueueRabbitMQ\Events\RabbitMQJobAfterRunEvent;
+use VladimirYuldashev\LaravelQueueRabbitMQ\Events\RabbitMQJobBeforeRunEvent;
+use VladimirYuldashev\LaravelQueueRabbitMQ\Events\RabbitMQJobCreateEvent;
+use VladimirYuldashev\LaravelQueueRabbitMQ\Events\RabbitMQJobHandleEvent;
+use VladimirYuldashev\LaravelQueueRabbitMQ\Events\RabbitMQJobRunExceptionEvent;
 use VladimirYuldashev\LaravelQueueRabbitMQ\Queue\RabbitMQQueue;
 
 class RabbitMQJob extends Job implements JobContract
@@ -25,6 +44,24 @@ class RabbitMQJob extends Job implements JobContract
     protected $connection;
     protected $consumer;
     protected $message;
+    
+    /**
+     * 事件监听配置
+     * @var int
+     */
+    protected $eventOpt = 0;
+    
+    /**
+     * 是否开启事件监听
+     * @var bool
+     */
+    protected $eventDisable = false;
+    
+    /**
+     * @var OptCheck
+     */
+    protected $eventCheck;
+    
 
     public function __construct(
         Container $container,
@@ -38,6 +75,39 @@ class RabbitMQJob extends Job implements JobContract
         $this->message = $message;
         $this->queue = $consumer->getQueue()->getQueueName();
         $this->connectionName = $connection->getConnectionName();
+        $this->eventDisable = config('rabbitmq.event_disable', false);
+        $this->eventOpt = config('rabbitmq.event', 0);
+        $this->eventCheck = OptCheck::make($this->eventOpt);
+        $this->init($container, $connection, $consumer, $message);
+    }
+    
+    /**
+     * @param Container $container
+     * @param RabbitMQQueue $connection
+     * @param AmqpConsumer $consumer
+     * @param AmqpMessage $message
+     */
+    protected function init(Container $container, RabbitMQQueue $connection, AmqpConsumer $consumer, AmqpMessage $message)
+    {
+        $rawBody = json_decode($message->getBody(), true);
+        if ($rawBody['data']['commandName'] === LaravelRabbitMQJob::class) {
+            $command = $rawBody['data']['command'];
+            $runJob = $this->getRunJob($command);
+            $mapRunJob = $this->getMapRunJob($runJob, $runJob);
+            $this->checkEventRun(RabbitMQEvent::JOB_HANDLE, (function () use ($runJob, $rawBody) {
+                event(new RabbitMQJobHandleEvent($runJob, $this->queue, $rawBody));
+            })->bindTo($this));
+            if ($mapRunJob && $mapRunJob !== LaravelRabbitMQJob::class && class_exists($mapRunJob)) {
+                $rawBody['displayName'] = $mapRunJob;
+                $rawBody['data']['commandName'] = $mapRunJob;
+                $rawBody['data']['command'] = ClassSerialize::convert(LaravelRabbitMQJob::class, $mapRunJob, $command);
+                $message->setBody(json_encode($rawBody));
+            }
+        }
+        $runJob = $runJob ?? $rawBody['data']['commandName'];
+        $this->checkEventRun(RabbitMQEvent::JOB_CREATE, (function () use ($container, $connection, $consumer, $message, $runJob) {
+            event(new RabbitMQJobCreateEvent($this->queue, $runJob, $container, $connection, $consumer, $message));
+        })->bindTo($this));
     }
 
     /**
@@ -53,8 +123,17 @@ class RabbitMQJob extends Job implements JobContract
             $payload = $this->payload();
 
             [$class, $method] = JobName::parse($payload['job']);
-
+    
+            $this->checkEventRun(RabbitMQEvent::JOB_BEFORE_RUN, (function () use ($payload) {
+                event(new RabbitMQJobBeforeRunEvent($payload['displayName'], $this->queue, $payload));
+            })->bindTo($this));
+            
             with($this->instance = $this->resolve($class))->{$method}($this, $payload['data']);
+    
+            $this->checkEventRun(RabbitMQEvent::JOB_AFTER_RUN, (function () use ($payload) {
+                event(new RabbitMQJobAfterRunEvent($payload['displayName'], $this->queue, $payload));
+            })->bindTo($this));
+            
         } catch (Exception $exception) {
             if (
                 $this->causedByDeadlock($exception) ||
@@ -174,6 +253,55 @@ class RabbitMQJob extends Job implements JobContract
             }
 
             throw $exception;
+        }
+    }
+    
+    /**
+     * @param string $command
+     * @return string
+     */
+    protected function getRunJob(string $command)
+    {
+        try {
+            $rabbitMQJob = unserialize($command);
+            return ($rabbitMQJob instanceof LaravelRabbitMQJob) ? $rabbitMQJob->jobClass : $command;
+        } catch (Throwable $exception) {
+            $this->checkEventRun(RabbitMQEvent::JOB_RUN_EXCEPTION, (function () {
+                event(new RabbitMQJobRunExceptionEvent($this->queue, $this->payload()));
+            })->bindTo($this));
+            return $command;
+        }
+    }
+    
+    /**
+     * @param string $runJob
+     * @param mixed $default
+     * @return mixed|string
+     */
+    protected function getMapRunJob(string $runJob, $default = null)
+    {
+        $queueMap = config('rabbitmq.map.' . $this->queue, []);
+        if (is_string($queueMap)) {
+            if (class_exists('App\Jobs\\'.ucfirst($this->queue).'\\'.$queueMap)) {
+                return 'App\Jobs\\'.ucfirst($this->queue).'\\'.$queueMap;
+            } else {
+                return class_exists($queueMap) ? $queueMap : (config($queueMap, [])[$runJob] ?? $default);
+            }
+        } elseif (class_exists('App\Jobs\\'.ucfirst($this->queue).'\\'.$runJob)) {
+            return 'App\Jobs\\'.ucfirst($this->queue).'\\'.$runJob;
+        } else {
+            return $queueMap[$runJob] ?? $default;
+        }
+    }
+    
+    /**
+     * @param int $check
+     * @param Closure $run
+     */
+    protected function checkEventRun(int $check, Closure $run)
+    {
+        if ($this->eventDisable) {
+            $this->eventCheck->checkRun($check, $run);
         }
     }
 }

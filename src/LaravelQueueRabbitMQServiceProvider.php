@@ -1,4 +1,12 @@
 <?php
+/**
+ * Author: Vladimir Yuldashev
+ * email: misterio92@gmail.com
+ *
+ * code modify:
+ * Author: 沧澜
+ * Date: 2019-12-30
+ */
 
 namespace VladimirYuldashev\LaravelQueueRabbitMQ;
 
@@ -15,9 +23,26 @@ class LaravelQueueRabbitMQServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->mergeConfigFrom(
-            __DIR__.'/../config/rabbitmq.php', 'queue.connections.rabbitmq'
+        $this->cMergeConfigFrom(
+            __DIR__.'/../config/rabbitmq.php',
+            'queue.connections.rabbitmq',
+            config('rabbitmq.connections', [])
         );
+    }
+    
+    /**
+     * Merge the given configuration with the existing configuration.
+     *
+     * @param string $path
+     * @param string $key
+     * @param array $confArr
+     * @return void
+     */
+    protected function cMergeConfigFrom($path, $key, array $confArr = [])
+    {
+        $config = $this->app['config']->get($key, []);
+        
+        $this->app['config']->set($key, array_merge(require $path, $config, $confArr));
     }
 
     /**

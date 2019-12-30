@@ -1,9 +1,18 @@
 <?php
+/**
+ * Author: Vladimir Yuldashev
+ * email: misterio92@gmail.com
+ *
+ * code modify:
+ * Author: 沧澜
+ * Date: 2019-12-30
+ */
 
 namespace VladimirYuldashev\LaravelQueueRabbitMQ\Queue;
 
 use RuntimeException;
 use Illuminate\Queue\Queue;
+use Illuminate\Support\Str;
 use Interop\Amqp\AmqpQueue;
 use Interop\Amqp\AmqpTopic;
 use Psr\Log\LoggerInterface;
@@ -71,11 +80,34 @@ class RabbitMQQueue extends Queue implements QueueContract
              */
             [$queue, $topic] = $this->declareEverything($queueName);
 
+            /** @var AmqpMessage $message */
             $message = $this->context->createMessage($payload);
-            $message->setRoutingKey($queue->getQueueName());
+
             $message->setCorrelationId($this->getCorrelationId());
             $message->setContentType('application/json');
             $message->setDeliveryMode(AmqpMessage::DELIVERY_MODE_PERSISTENT);
+
+            if (isset($options['routing_key'])) {
+                $message->setRoutingKey($options['routing_key']);
+            } else {
+                $message->setRoutingKey($queue->getQueueName());
+            }
+
+            if (isset($options['priority'])) {
+                $message->setPriority($options['priority']);
+            }
+
+            if (isset($options['expiration'])) {
+                $message->setExpiration($options['expiration']);
+            }
+
+            if (isset($options['delivery_tag'])) {
+                $message->setDeliveryTag($options['delivery_tag']);
+            }
+
+            if (isset($options['consumer_tag'])) {
+                $message->setConsumerTag($options['consumer_tag']);
+            }
 
             if (isset($options['headers'])) {
                 $message->setHeaders($options['headers']);
@@ -237,6 +269,16 @@ class RabbitMQQueue extends Queue implements QueueContract
     protected function getQueueName($queueName = null)
     {
         return $queueName ?: $this->queueName;
+    }
+
+    /**
+     * Get a random ID string.
+     *
+     * @return string
+     */
+    protected function getRandomId(): string
+    {
+        return Str::random(32);
     }
 
     /**

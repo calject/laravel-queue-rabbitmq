@@ -1,9 +1,19 @@
 <?php
+/**
+ * Author: Vladimir Yuldashev
+ * email: misterio92@gmail.com
+ *
+ * code modify:
+ * Author: 沧澜
+ * Date: 2019-12-30
+ */
+
 
 namespace VladimirYuldashev\LaravelQueueRabbitMQ\Queue\Connectors;
 
 use Illuminate\Support\Arr;
 use Interop\Amqp\AmqpContext;
+use InvalidArgumentException;
 use Illuminate\Contracts\Queue\Queue;
 use Interop\Amqp\AmqpConnectionFactory;
 use Enqueue\AmqpTools\DelayStrategyAware;
@@ -14,6 +24,7 @@ use Illuminate\Queue\Connectors\ConnectorInterface;
 use VladimirYuldashev\LaravelQueueRabbitMQ\Queue\RabbitMQQueue;
 use Interop\Amqp\AmqpConnectionFactory as InteropAmqpConnectionFactory;
 use Enqueue\AmqpLib\AmqpConnectionFactory as EnqueueAmqpConnectionFactory;
+use VladimirYuldashev\LaravelQueueRabbitMQ\Queue\RabbitMQQueueAdapter;
 
 class RabbitMQConnector implements ConnectorInterface
 {
@@ -70,6 +81,15 @@ class RabbitMQConnector implements ConnectorInterface
             $context->close();
         });
 
-        return new RabbitMQQueue($context, $config);
+        $worker = Arr::get($config, 'worker', 'default');
+
+        if ($worker === 'default') {
+            return app()::VERSION >= '5.7.0' ? new RabbitMQQueueAdapter($context, $config) : new RabbitMQQueue($context, $config);
+        } elseif ($worker === 'higher') {
+            return new RabbitMQQueueAdapter($context, $config);
+        } elseif ($worker === 'lower') {
+            new RabbitMQQueue($context, $config);
+        }
+        throw new InvalidArgumentException('Invalid worker.');
     }
 }
