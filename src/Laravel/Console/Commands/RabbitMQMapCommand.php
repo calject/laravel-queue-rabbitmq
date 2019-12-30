@@ -77,7 +77,6 @@ class RabbitMQMapCommand extends Command
      */
     protected function create(string $path)
     {
-        $map = [];
         $namespace = $this->jobNamespace.basename($path).'\\';
         (new Folder($path))->eachFiles(function ($index, $file) use ($namespace, &$map) {
             $jobName = rtrim(basename($file), '.php');
@@ -88,13 +87,14 @@ class RabbitMQMapCommand extends Command
             }
             $map['class'][$jobName] = $jobClass;
         });
-        
-        $sniArr = SnippetArray::create($map['class'] + ($map['alias'] ?? []));
-        $sniArr->callable(function ($key, $value) {
-            return "'${key}' => '${value}',";
-        });
-        $strReader = $sniArr->addPhpHead()->head('return ')->end(';')->get();
-        file_put_contents($this->mapPath.strtolower(basename($path)).'.php', $strReader);
+        if ($map) {
+            $sniArr = SnippetArray::create($map['class'] + ($map['alias'] ?? []));
+            $sniArr->callable(function ($key, $value) {
+                return "'${key}' => '${value}',";
+            });
+            $strReader = $sniArr->addPhpHead()->head('return ')->end(';')->get();
+            file_put_contents($this->mapPath . strtolower(basename($path)) . '.php', $strReader);
+        }
     }
     
 }
