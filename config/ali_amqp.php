@@ -24,11 +24,12 @@ return [
      */
     'factory_class' => Enqueue\AmqpLib\AmqpConnectionFactory::class,
     
-    'host' => env('RABBITMQ_HOST', '127.0.0.1'),
-    'port' => env('RABBITMQ_PORT', 5672),
+    'host' => env('ALI_AMQP_HOST', '127.0.0.1'),
+    'port' => env('ALI_AMQP_PORT', 5672),
     
-    'vhost' => env('RABBITMQ_VHOST', '/'),
-    'login' => env('RABBITMQ_LOGIN', 'guest'),
+    'vhost' => env('ALI_AMQP_VHOST', '/'),
+    
+    'login' => env('Access_Key_ID', 'guest'),
     'password' => env('RABBITMQ_PASSWORD', 'guest'),
     
     'queue' => env('RABBITMQ_QUEUE', 'default'),
